@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="km">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0b1220">
+  <title>Tra Deposit | Bakong KHQR</title>
+  <style>
+    :root{color-scheme:dark;--bg:#080d18;--panel:#111a2b;--line:#26354d;--green:#2dd4a0;--muted:#9aabc3}
+    *{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at top,#152744,var(--bg) 55%);font-family:system-ui,-apple-system,sans-serif;color:#f4f7fb;min-height:100vh}
+    main{max-width:520px;margin:auto;padding:24px 16px 48px}.brand{display:flex;align-items:center;gap:12px;margin:12px 0 24px}.logo{width:46px;height:46px;border-radius:14px;background:var(--green);color:#05251c;display:grid;place-items:center;font-size:22px;font-weight:900}
+    h1{font-size:24px;margin:0}.sub{color:var(--muted);margin-top:4px;font-size:14px}.card{background:rgba(17,26,43,.96);border:1px solid var(--line);border-radius:20px;padding:20px;margin:16px 0;box-shadow:0 12px 40px #0003}
+    label{display:block;font-size:14px;color:#d7e0ed;margin:14px 0 7px}input,select{width:100%;padding:14px;border:1px solid var(--line);border-radius:12px;background:#0a1220;color:#fff;font-size:16px}
+    button{width:100%;border:0;border-radius:12px;background:var(--green);color:#06251d;font-weight:800;font-size:16px;padding:15px;margin-top:18px;cursor:pointer}
+    button:disabled{opacity:.5;cursor:wait}.note{color:var(--muted);font-size:12px;line-height:1.6}.hidden{display:none}.qr{display:block;width:min(100%,300px);margin:14px auto;border-radius:14px;background:#fff;padding:8px}
+    .status{display:inline-block;border:1px solid #8b6d28;background:#3b2c0e;color:#ffdb75;padding:6px 10px;border-radius:20px;font-size:12px;font-weight:700}.center{text-align:center;overflow-wrap:anywhere}.status.paid{background:#07392c;color:#76f2c5;border-color:#1e8061}.status.bad{background:#3b1010;color:#ff9b9b;border-color:#8b2828}.error{color:#ff9b9b;font-size:14px;margin-top:12px}.small-link{color:var(--green);text-decoration:none}
+  </style>
+</head>
+<body>
+<main>
+  <header class="brand"><div class="logo">T</div><div><h1>Tra Deposit</h1><div class="sub">Bakong KHQR</div></div></header>
+  <section class="card" id="formCard">
+    <h2 style="margin:0">ដាក់ប្រាក់ / Deposit</h2>
+    <p class="sub">បញ្ចូលចំនួនប្រាក់ រួចស្កេន KHQR ដោយកម្មវិធីធនាគាររបស់អ្នក។</p>
+    <form id="depositForm">
+      <label for="amount">ចំនួនប្រាក់ / Amount</label>
+      <input id="amount" name="amount" type="number" min="0.01" max="1000000" step="0.01" placeholder="10.00" required>
+      <label for="currency">រូបិយប័ណ្ណ / Currency</label>
+      <select id="currency" name="currency"><option value="USD">USD — US Dollar</option><option value="KHR">KHR — Cambodian Riel</option></select>
+      <button id="createBtn" type="submit">បង្កើត KHQR / Generate QR</button>
+      <div id="error" class="error" role="alert"></div>
+    </form>
+    <p class="note">កុំបញ្ចូលលេខសម្ងាត់ធនាគារ ឬ OTP នៅលើគេហទំព័រនេះ។</p>
+  </section>
+  <section class="card hidden" id="paymentCard">
+    <div class="center"><h2 style="margin-top:0">ស្កេនដើម្បីបង់ប្រាក់</h2><span id="status" class="status">PENDING</span>
+      <img id="qrImage" class="qr" alt="KHQR payment code">
+      <h2 id="amountText"></h2><p class="sub">ស្កេនជាមួយ Bakong ឬកម្មវិធីធនាគារណាមួយដែលគាំទ្រ KHQR។</p>
+      <p class="note">លេខប្រតិបត្តិការ៖ <span id="depositId"></span></p>
+      <button id="checkBtn" type="button">ពិនិត្យការទូទាត់ / Check payment</button>
+      <p id="checkMessage" class="note" aria-live="polite">កំពុងរង់ចាំការទូទាត់…</p>
+      <button id="newBtn" type="button" style="background:#26354d;color:#fff">បង្កើតការដាក់ប្រាក់ថ្មី</button>
+    </div>
+  </section>
+  <p class="note center">KHQR • Bakong</p>
+</main>
+<script>
+const form = document.getElementById('depositForm');
+const createBtn = document.getElementById('createBtn');
+const errorBox = document.getElementById('error');
+const paymentCard = document.getElementById('paymentCard');
+const formCard = document.getElementById('formCard');
+const checkBtn = document.getElementById('checkBtn');
+const statusEl = document.getElementById('status');
+const msgEl = document.getElementById('checkMessage');
+const amountInput = document.getElementById('amount');
+const currencySelect = document.getElementById('currency');
+let currentId = null;
+let pollTimer = null;
+
+function syncCurrency() {
+  const khr = currencySelect.value === 'KHR';
+  amountInput.step = khr ? '1' : '0.01';
+  amountInput.min = khr ? '1' : '0.01';
+  amountInput.placeholder = khr ? '40000' : '10.00';
+}
+currencySelect.addEventListener('change', syncCurrency);
+syncCurrency();
+
+function stopPolling() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
+
+function showStatus(status) {
+  statusEl.textContent = status;
+  statusEl.className = 'status' + (status === 'PAID' ? ' paid' : (status === 'FAILED' || status === 'EXPIRED') ? ' bad' : '');
+  if (status === 'PAID') msgEl.textContent = 'ទទួលបានការទូទាត់ហើយ។ អរគុណ!';
+  else if (status === 'EXPIRED') msgEl.textContent = 'QR ផុតកំណត់។ សូមបង្កើតថ្មី។';
+  else if (status === 'FAILED') msgEl.textContent = 'ការទូទាត់មិនត្រូវនឹងការស្នើសុំ។ សូមទាក់ទងអ្នកគ្រប់គ្រង។';
+  if (status !== 'PENDING') { stopPolling(); checkBtn.disabled = true; }
+}
+
+form.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  errorBox.textContent = '';
+  createBtn.disabled = true;
+  createBtn.textContent = 'កំពុងបង្កើត…';
+  try {
+    const response = await fetch('/api/create-deposit', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ amount: Number(amountInput.value), currency: currencySelect.value })
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not create payment.');
+    currentId = data.id;
+    document.getElementById('qrImage').src = data.qrImage;
+    document.getElementById('amountText').textContent = `${data.amount} ${data.currency}`;
+    document.getElementById('depositId').textContent = data.id;
+    checkBtn.disabled = false;
+    showStatus('PENDING');
+    msgEl.textContent = 'កំពុងរង់ចាំការទូទាត់…';
+    formCard.classList.add('hidden');
+    paymentCard.classList.remove('hidden');
+    stopPolling();
+    pollTimer = setInterval(checkStatus, 4000);
+  } catch (err) {
+    errorBox.textContent = err.message;
+  } finally {
+    createBtn.disabled = false;
+    createBtn.textContent = 'បង្កើត KHQR / Generate QR';
+  }
+});
+
+async function checkStatus() {
+  if (!currentId) return;
+  try {
+    const response = await fetch(`/api/check-deposit?id=${encodeURIComponent(currentId)}`, {cache:'no-store'});
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not check payment.');
+    showStatus(data.status);
+    if (data.warning) msgEl.textContent = data.warning;
+  } catch (err) {
+    msgEl.textContent = err.message;
+  }
+}
+checkBtn.addEventListener('click', checkStatus);
+document.getElementById('newBtn').addEventListener('click', () => {
+  stopPolling();
+  currentId = null;
+  paymentCard.classList.add('hidden');
+  formCard.classList.remove('hidden');
+});
+</script>
+</body>
+</html>
